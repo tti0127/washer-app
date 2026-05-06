@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>광탄성 와셔 안전 진단 시스템</title>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.17.0/dist/tf.min.js"></script>
+<style>
+  /* ── 기본 ── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg:      #080808;
+    --bg2:     #0E0E0E;
+    --bg3:     #141414;
+    --border:  #1E1E1E;
+    --text:    #D8D8D8;
+    --muted:   #555;
+    --safe:    #00D68F;
+    --caution: #FFAA00;
+    --danger:  #FF4444;
+    --mono:    'Courier New', monospace;
+  }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, 'Segoe UI', sans-serif;
+    min-height: 100vh;
+  }
+
+  /* ── 레이아웃 ── */
+  .app {
+    max-width: 440px;
+    margin: 0 auto;
+    padding: 1.5rem 1rem 3rem;
+  }
+
+  /* ── 헤더 ── */
+  .hdr { border-bottom: 1px solid var(--border); padding-bottom: 1rem; margin-bottom: 1.5rem; }
+  .hdr-tag { font: 10px/1 var(--mono); letter-spacing: 3px; color: var(--muted); margin-bottom: 5px; }
+  .hdr-title { font-size: 17px; font-weight: 500; color: #EEE; line-height: 1.3; }
+  .hdr-sub { font: 10px/1 var(--mono); color: var(--muted); margin-top: 3px; }
+
+  /* ── 모델 로딩 상태 ── */
+  .model-bar {
+    display: flex; align-items: center; gap: 8px;
+    font: 11px/1 var(--mono);
+    color: var(--muted);
+    margin-bottom: 1.25rem;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg2);
+  }
+  .model-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted); flex-shrink: 0;
+    transition: background .3s;
+  }
+  .model-dot.ready  { background: var(--safe); animation: pulse 2s ease-in-out infinite; }
+  .model-dot.error  { background: var(--danger); }
+  .model-dot.loading { background: var(--caution); animation: pulse .6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+
+  /* ── 업로드 존 ── */
+  .drop-zone {
+    border: 1px dashed #2A2A2A;
+    border-radius: 3px;
+    padding: 2.25rem 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    background: var(--bg2);
+    transition: border-color .2s, background .2s;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .drop-zone:hover, .drop-zone:focus { border-color: #3A3A3A; background: var(--bg3); outline: none; }
+  .drop-zone:active { opacity: .8; }
+  .drop-ring {
+    width: 52px; height: 52px; border: 1px solid #282828; border-radius: 50%;
+    margin: 0 auto .875rem; display: flex; align-items: center; justify-content: center;
+  }
+  .drop-title { font-size: 13px; font-weight: 500; color: #BBB; margin-bottom: 3px; }
+  .drop-sub   { font: 10px/1.6 var(--mono); color: var(--muted); }
+  #file-input { display: none; }
+
+  /* ── 이미지 미리보기 ── */
+  .img-wrap {
+    position: relative; border: 1px solid var(--border);
+    border-radius: 3px; overflow: hidden;
+  }
+  .img-wrap img { width: 100%; display: block; }
+
+  /* ── 스캔 애니메이션 ── */
+  .scan-ov {
+    position: absolute; inset: 0; background: rgba(0,0,0,.75);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+  }
+  .scan-beam {
+    position: absolute; left: 0; width: 100%; height: 1px;
+    background: linear-gradient(90deg, transparent 5%, var(--safe) 50%, transparent 95%);
+    box-shadow: 0 0 6px var(--safe);
+    transition: top .01s linear;
+  }
+  .scan-txt {
+    font: 10px/1 var(--mono); color: var(--safe);
+    letter-spacing: 3px; animation: blink 1s step-end infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.15} }
+
+  /* ── 결과 카드 ── */
+  .result-card {
+    border: 1px solid var(--rc-border, #1E1E1E);
+    border-radius: 3px;
+    background: var(--rc-bg, var(--bg2));
+    overflow: hidden;
+    margin-top: 1rem;
+    animation: fadeIn .4s ease;
+  }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+
+  .rh { padding: 1.125rem; border-bottom: 1px solid var(--rc-border); display: flex; align-items: flex-start; gap: 12px; }
+  .badge {
+    width: 48px; height: 48px; flex-shrink: 0;
+    border: 1px solid var(--rc-color); border-radius: 2px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+  }
+  .badge-icon { font: 18px/1 var(--mono); color: var(--rc-color); }
+  .badge-lbl  { font: 7px/1 var(--mono); color: var(--rc-color); letter-spacing: 1px; margin-top: 3px; }
+  .rh-ko      { font-size: 22px; font-weight: 500; color: var(--rc-color); line-height: 1; }
+  .conf-row   { display: flex; align-items: center; gap: 7px; margin-top: 6px; }
+  .cbar       { flex: 1; height: 2px; background: #1E1E1E; border-radius: 1px; overflow: hidden; }
+  .cbar-fill  { height: 100%; background: var(--rc-color); border-radius: 1px; transition: width 1.2s ease; }
+  .cnum       { font: 10px/1 var(--mono); color: var(--rc-color); min-width: 30px; text-align: right; }
+
+  /* ── 게이지 ── */
+  .gauge-sec  { padding: .75rem 1.125rem; border-bottom: 1px solid var(--rc-border); }
+  .gauge-track {
+    height: 4px; border-radius: 2px; position: relative; margin-bottom: 5px;
+    background: linear-gradient(90deg, var(--safe) 0%, var(--caution) 50%, var(--danger) 100%);
+  }
+  .gauge-pin {
+    position: absolute; width: 2px; height: 10px; background: #fff;
+    top: -3px; border-radius: 1px; transform: translateX(-50%);
+    transition: left 1.2s ease;
+  }
+  .gauge-lbls { display: flex; justify-content: space-between; font: 9px/1 var(--mono); }
+
+  /* ── 데이터 그리드 ── */
+  .data-row   { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--rc-border); }
+  .dc         { padding: .75rem .875rem; border-right: 1px solid var(--rc-border); }
+  .dc:last-child { border-right: none; }
+  .dlbl       { font: 8px/1 var(--mono); letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin-bottom: 4px; }
+  .dval       { font-size: 12px; font-weight: 500; }
+
+  /* ── 확률 바 3개 ── */
+  .probs-sec  { padding: .75rem 1.125rem; border-top: 1px solid var(--rc-border); }
+  .prob-row   { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .prob-row:last-child { margin-bottom: 0; }
+  .prob-name  { font: 11px/1 var(--mono); width: 40px; }
+  .prob-bar   { flex: 1; height: 3px; background: #1E1E1E; border-radius: 2px; overflow: hidden; }
+  .prob-fill  { height: 100%; border-radius: 2px; transition: width 1.2s ease; }
+  .prob-num   { font: 10px/1 var(--mono); color: var(--muted); min-width: 28px; text-align: right; }
+
+  /* ── 텍스트 섹션 ── */
+  .tsec      { padding: .75rem 1.125rem; border-top: 1px solid var(--rc-border); }
+  .tlbl      { font: 8px/1 var(--mono); letter-spacing: 2px; color: var(--muted); text-transform: uppercase; margin-bottom: 5px; }
+  .tbody     { font-size: 12px; color: #AAA; line-height: 1.7; }
+
+  /* ── 버튼 ── */
+  .reset-btn {
+    width: 100%; padding: 11px; margin-top: .875rem;
+    background: transparent; border: 1px solid var(--border);
+    border-radius: 3px; color: var(--muted); font-size: 12px;
+    cursor: pointer; font-family: inherit;
+    transition: border-color .2s, color .2s;
+    display: flex; align-items: center; justify-content: center; gap: 7px;
+  }
+  .reset-btn:hover { border-color: #333; color: #999; }
+
+  /* ── 에러 ── */
+  .err-box {
+    background: #1A0000; border: 1px solid #FF444430; border-radius: 3px;
+    padding: .75rem; font: 11px/1.6 var(--mono); color: var(--danger);
+    margin-top: .875rem;
+  }
+
+  /* ── 모델 경로 안내 ── */
+  .path-hint {
+    margin-top: .875rem; padding: .75rem;
+    border: 1px solid #1E1E1E; border-radius: 3px;
+    background: var(--bg2);
+  }
+  .path-hint p { font: 10px/1.6 var(--mono); color: var(--muted); }
+  .path-hint code { color: #888; background: #111; padding: 1px 4px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- 헤더 -->
+  <header class="hdr">
+    <div class="hdr-tag">PHOTOELASTIC WASHER ANALYZER</div>
+    <div class="hdr-title">광탄성 와셔<br>안전 진단 시스템</div>
+    <div class="hdr-sub">CNN · TensorFlow.js · v1.0</div>
+  </header>
+
+  <!-- 모델 상태 표시 -->
+  <div class="model-bar" id="model-bar">
+    <div class="model-dot loading" id="model-dot"></div>
+    <span id="model-status">모델 로딩 중...</span>
+  </div>
+
+  <!-- 업로드 존 -->
+  <div class="drop-zone" id="drop-zone" role="button" tabindex="0"
+       onclick="document.getElementById('file-input').click()"
+       onkeydown="if(event.key==='Enter')this.click()">
+    <div class="drop-ring">
+      <svg width="22" height="22" fill="none" stroke="#555" stroke-width="1.5" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5"/>
+        <line x1="12" y1="5" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="19"/>
+        <line x1="5" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="19" y2="12"/>
+      </svg>
+    </div>
+    <div class="drop-title">와셔 이미지 업로드</div>
+    <div class="drop-sub">tap · 카메라 촬영 또는 파일 선택</div>
+  </div>
+
+  <input type="file" id="file-input" accept="image/*" capture="environment">
+
+  <!-- 이미지 미리보기 (숨김) -->
+  <div class="img-wrap" id="img-wrap" style="display:none">
+    <img id="preview" alt="와셔 이미지">
+    <div class="scan-ov" id="scan-ov" style="display:none">
+      <div class="scan-beam" id="scan-beam"></div>
+      <div class="scan-txt">ANALYZING FRINGE PATTERN...</div>
+    </div>
+  </div>
+
+  <!-- 에러 -->
+  <div class="err-box" id="err-box" style="display:none"></div>
+
+  <!-- 결과 카드 (숨김) -->
+  <div class="result-card" id="result-card" style="display:none"></div>
+
+  <!-- 리셋 버튼 (숨김) -->
+  <button class="reset-btn" id="reset-btn" style="display:none" onclick="resetApp()">
+    <svg width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>
+    </svg>
+    새 사진 분석
+  </button>
+
+  <!-- 모델 경로 안내 -->
+  <div class="path-hint" id="path-hint">
+    <p>모델 파일 위치: <code>model/model.json</code></p>
+    <p>Colab에서 <code>tfjs_model.zip</code> 다운로드 후 압축 해제 → <code>model/</code> 폴더에 배치</p>
+  </div>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════════════
+//  설정
+// ══════════════════════════════════════════════════
+const MODEL_URL    = './model/model.json';  // 모델 경로 (상대 경로)
+const IMG_SIZE     = 224;
+const CLASS_NAMES  = ['위험', '주의', '안전'];
+const CLASS_ICONS  = ['✕', '!', '✓'];
+const CLASS_LABELS = ['DANGER', 'CAUTION', 'SAFE'];
+const CLASS_COLORS = ['#FF4444', '#FFAA00', '#00D68F'];
+const CLASS_BGS    = ['#1A0000', '#1A1200', '#001810'];
+const CLASS_BORDS  = ['#FF444430', '#FFAA0030', '#00D68F30'];
+// 게이지 위치: 위험=92%, 주의=55%, 안전=8%
+const GAUGE_POS    = [92, 55, 8];
+
+// 분석 결과 텍스트
+const ACTIONS = [
+  '즉시 작업 중단 후 전수 점검 실시. 해당 체결부를 규정 토크로 재체결하세요.',
+  '조기 점검 일정을 수립하세요. 토크 렌치로 체결력을 확인하고 기록하세요.',
+  '정상 체결 상태입니다. 정기 점검 일정에 따라 모니터링을 지속하세요.',
+];
+
+// ══════════════════════════════════════════════════
+//  전역 상태
+// ══════════════════════════════════════════════════
+let model = null;
+let scanInterval = null;
+
+// ══════════════════════════════════════════════════
+//  모델 로딩
+// ══════════════════════════════════════════════════
+async function loadModel() {
+  const dot    = document.getElementById('model-dot');
+  const status = document.getElementById('model-status');
+  try {
+    dot.className    = 'model-dot loading';
+    status.textContent = '모델 로딩 중...';
+    model = await tf.loadLayersModel(MODEL_URL);
+    // 워밍업 (첫 추론 지연 방지)
+    const dummy = tf.zeros([1, IMG_SIZE, IMG_SIZE, 3]);
+    await model.predict(dummy).data();
+    dummy.dispose();
+    dot.className    = 'model-dot ready';
+    status.textContent = '모델 준비 완료 · 와셔 사진을 업로드하세요';
+    document.getElementById('path-hint').style.display = 'none';
+  } catch (e) {
+    dot.className    = 'model-dot error';
+    status.textContent = '모델 로드 실패 · model/ 폴더 확인 필요';
+    console.error(e);
+  }
+}
+
+// ══════════════════════════════════════════════════
+//  전처리: Hue 채널 추출 + 원형 마스크
+//  (Colab 학습 파이프라인과 동일)
+// ══════════════════════════════════════════════════
+function preprocessImage(imgElement) {
+  const canvas = document.createElement('canvas');
+  canvas.width  = IMG_SIZE;
+  canvas.height = IMG_SIZE;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(imgElement, 0, 0, IMG_SIZE, IMG_SIZE);
+
+  const { data } = ctx.getImageData(0, 0, IMG_SIZE, IMG_SIZE);
+  const hue = new Float32Array(IMG_SIZE * IMG_SIZE);
+
+  // RGB → HSV Hue 채널 계산
+  for (let i = 0; i < IMG_SIZE * IMG_SIZE; i++) {
+    const r = data[i * 4]     / 255;
+    const g = data[i * 4 + 1] / 255;
+    const b = data[i * 4 + 2] / 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d   = max - min;
+    let h = 0;
+    if (d > 0) {
+      if      (max === r) h = ((g - b) / d + 6) % 6;
+      else if (max === g) h = (b - r) / d + 2;
+      else                h = (r - g) / d + 4;
+      h *= 60;
+    }
+    hue[i] = h / 360;  // 0~1 정규화
+  }
+
+  // 원형 마스크 적용 (와셔 영역만)
+  const cx = IMG_SIZE / 2, cy = IMG_SIZE / 2;
+  const r  = IMG_SIZE / 2 - 5;
+  for (let y = 0; y < IMG_SIZE; y++) {
+    for (let x = 0; x < IMG_SIZE; x++) {
+      const dx = x - cx, dy = y - cy;
+      if (dx * dx + dy * dy > r * r) hue[y * IMG_SIZE + x] = 0;
+    }
+  }
+
+  // [1, 224, 224, 3] 텐서 생성 (Hue를 3채널로 복사)
+  const buf = new Float32Array(1 * IMG_SIZE * IMG_SIZE * 3);
+  for (let i = 0; i < IMG_SIZE * IMG_SIZE; i++) {
+    buf[i * 3]     = hue[i];
+    buf[i * 3 + 1] = hue[i];
+    buf[i * 3 + 2] = hue[i];
+  }
+  return tf.tensor4d(buf, [1, IMG_SIZE, IMG_SIZE, 3]);
+}
+
+// ══════════════════════════════════════════════════
+//  스캔 애니메이션
+// ══════════════════════════════════════════════════
+function startScan() {
+  document.getElementById('scan-ov').style.display = 'flex';
+  let pos = 0;
+  scanInterval = setInterval(() => {
+    pos = (pos + 1.2) % 101;
+    document.getElementById('scan-beam').style.top = pos + '%';
+  }, 14);
+}
+function stopScan() {
+  clearInterval(scanInterval);
+  document.getElementById('scan-ov').style.display = 'none';
+}
+
+// ══════════════════════════════════════════════════
+//  추론 및 결과 렌더링
+// ══════════════════════════════════════════════════
+async function runInference(imgElement) {
+  if (!model) {
+    showError('모델이 로드되지 않았습니다. 잠시 후 다시 시도해주세요.');
+    return;
+  }
+  startScan();
+  try {
+    const tensor = preprocessImage(imgElement);
+    const probsTensor = model.predict(tensor);
+    const probs = Array.from(await probsTensor.data());
+    tensor.dispose();
+    probsTensor.dispose();
+
+    const classIdx    = probs.indexOf(Math.max(...probs));
+    const confidence  = Math.round(probs[classIdx] * 100);
+    const probsPct    = probs.map(p => Math.round(p * 100));
+
+    renderResult(classIdx, confidence, probsPct);
+  } catch (e) {
+    showError('추론 오류: ' + e.message);
+  } finally {
+    stopScan();
+  }
+}
+
+function renderResult(classIdx, confidence, probsPct) {
+  const color  = CLASS_COLORS[classIdx];
+  const bg     = CLASS_BGS[classIdx];
+  const border = CLASS_BORDS[classIdx];
+
+  const card = document.getElementById('result-card');
+  card.style.setProperty('--rc-color',  color);
+  card.style.setProperty('--rc-bg',     bg);
+  card.style.setProperty('--rc-border', border);
+
+  card.innerHTML = `
+    <div class="rh">
+      <div class="badge">
+        <div class="badge-icon">${CLASS_ICONS[classIdx]}</div>
+        <div class="badge-lbl">${CLASS_LABELS[classIdx]}</div>
+      </div>
+      <div style="flex:1">
+        <div class="rh-ko">${CLASS_NAMES[classIdx]}</div>
+        <div class="conf-row">
+          <div class="cbar"><div class="cbar-fill" style="width:${confidence}%"></div></div>
+          <div class="cnum">${confidence}%</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="gauge-sec">
+      <div class="gauge-track">
+        <div class="gauge-pin" style="left:${GAUGE_POS[classIdx]}%"></div>
+      </div>
+      <div class="gauge-lbls">
+        <span style="color:var(--safe)">안전</span>
+        <span style="color:var(--caution)">주의</span>
+        <span style="color:var(--danger)">위험</span>
+      </div>
+    </div>
+
+    <div class="data-row">
+      ${CLASS_NAMES.map((name, i) => `
+        <div class="dc">
+          <div class="dlbl">${name}</div>
+          <div class="dval" style="color:${CLASS_COLORS[i]}">${probsPct[i]}%</div>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="probs-sec">
+      ${CLASS_NAMES.map((name, i) => `
+        <div class="prob-row">
+          <div class="prob-name" style="color:${CLASS_COLORS[i]}">${name}</div>
+          <div class="prob-bar">
+            <div class="prob-fill" style="width:${probsPct[i]}%;background:${CLASS_COLORS[i]}"></div>
+          </div>
+          <div class="prob-num">${probsPct[i]}%</div>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="tsec">
+      <div class="tlbl">권고 조치</div>
+      <div class="tbody">${ACTIONS[classIdx]}</div>
+    </div>
+  `;
+
+  card.style.display = 'block';
+  document.getElementById('reset-btn').style.display = 'flex';
+}
+
+// ══════════════════════════════════════════════════
+//  파일 입력 핸들러
+// ══════════════════════════════════════════════════
+document.getElementById('file-input').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (re) => {
+    const img = document.getElementById('preview');
+    img.onload = () => runInference(img);
+    img.src = re.target.result;
+
+    const wrap = document.getElementById('img-wrap');
+    wrap.style.display = 'block';
+    document.getElementById('drop-zone').style.display = 'none';
+    document.getElementById('result-card').style.display = 'none';
+    document.getElementById('reset-btn').style.display = 'none';
+    document.getElementById('err-box').style.display = 'none';
+  };
+  reader.readAsDataURL(file);
+});
+
+// ══════════════════════════════════════════════════
+//  리셋
+// ══════════════════════════════════════════════════
+function resetApp() {
+  document.getElementById('drop-zone').style.display = 'block';
+  document.getElementById('img-wrap').style.display = 'none';
+  document.getElementById('result-card').style.display = 'none';
+  document.getElementById('reset-btn').style.display = 'none';
+  document.getElementById('err-box').style.display = 'none';
+  document.getElementById('file-input').value = '';
+}
+
+function showError(msg) {
+  const box = document.getElementById('err-box');
+  box.textContent = msg;
+  box.style.display = 'block';
+  document.getElementById('reset-btn').style.display = 'flex';
+}
+
+// ══════════════════════════════════════════════════
+//  초기화
+// ══════════════════════════════════════════════════
+loadModel();
+</script>
+</body>
+</html>

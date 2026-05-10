@@ -389,7 +389,7 @@ async function runInference(imgElement) {
   startScan();
   try {
     const tensor = preprocessImage(imgElement);
-    const probsTensor = model.execute(tensor);
+    const probsTensor = model.predict(tensor);
     const probs = Array.from(await probsTensor.data());
     tensor.dispose();
     probsTensor.dispose();

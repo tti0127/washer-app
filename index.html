@@ -295,7 +295,7 @@ async function loadModel() {
   try {
     dot.className    = 'model-dot loading';
     status.textContent = '모델 로딩 중...';
-    model = await tf.loadGraphModel(MODEL_URL);
+    model = await tf.loadLayersModel(MODEL_URL);
     // 워밍업 (첫 추론 지연 방지)
     const dummy = tf.zeros([1, IMG_SIZE, IMG_SIZE, 3]);
     await model.predict(dummy).data();
